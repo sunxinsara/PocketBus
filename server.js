@@ -4,72 +4,67 @@ const path = require("path");
 
 const app = express();
 const PORT = 3000;
-const dataFolder = path.join(__dirname, "GTFS_Realtime");
 
-// 加载 JSON 文件并解析为对象
-function loadJSON(fileName) {
-    const filePath = path.join(dataFolder, `${fileName}.json`);
-    if (fs.existsSync(filePath)) {
-        const data = fs.readFileSync(filePath, "utf-8");
-        return JSON.parse(data);
-    } else {
-        throw new Error(`File ${fileName}.json not found`);
-    }
-}
+const dataDir = path.join(__dirname, "GTFS_Realtime");
+const shapesDir = path.join(dataDir, "shapes_split");
 
-// 通过公交车名称获取停站信息的接口
-app.get("/api/bus-stops", (req, res) => {
-    const routeName = req.query.routeName; // 从查询参数中获取公交车名称（如 A1 或 A2）
+// 路由：根据公交线路名称获取路线数据
+app.get("/api/route", (req, res) => {
+    const routeName = req.query.routeName; // 获取查询参数中的公交线路名称，例如 "A1"
 
     if (!routeName) {
         return res.status(400).json({ error: "Route name is required" });
     }
 
-    try {
-        // 加载数据
-        const routes = loadJSON("routes");
-        const stops = loadJSON("stops");
-        const trips = loadJSON("trips");
-        const stopTimes = loadJSON("stop_times");
+    // Step 1: 通过 routeName 查找 route_id
+    const routesFilePath = path.join(dataDir, "routes.json");
+    fs.readFile(routesFilePath, "utf-8", (err, routesData) => {
+        if (err) {
+            console.error("Error reading routes.json:", err);
+            return res.status(500).json({ error: "Error reading routes data" });
+        }
 
-        // 查找 route_id
+        const routes = JSON.parse(routesData);
         const route = routes.find(r => r.route_short_name === routeName);
+
         if (!route) {
+            console.error(`Route not found for name: ${routeName}`);
             return res.status(404).json({ error: "Route not found" });
         }
-        
+
         const routeId = route.route_id;
 
-        // 获取对应的 trip_id 列表
-        const tripIds = trips
-            .filter(trip => trip.route_id === routeId)
-            .map(trip => trip.trip_id);
+        // Step 2: 通过 route_id 查找 shape_id
+        const tripsFilePath = path.join(dataDir, "trips.json");
+        fs.readFile(tripsFilePath, "utf-8", (err, tripsData) => {
+            if (err) {
+                console.error("Error reading trips.json:", err);
+                return res.status(500).json({ error: "Error reading trips data" });
+            }
 
-        // 从 stop_times.json 中找出相应的 stop_id 并按顺序排序
-        const routeStops = stopTimes
-            .filter(stopTime => tripIds.includes(stopTime.trip_id))
-            .sort((a, b) => a.stop_sequence - b.stop_sequence)
-            .map(stopTime => stopTime.stop_id);
+            const trips = JSON.parse(tripsData);
+            const trip = trips.find(t => t.route_id === routeId);
 
-        // 根据 stop_id 在 stops.json 中查找站点名称
-        const stopDetails = stops
-            .filter(stop => routeStops.includes(stop.stop_id))
-            .map(stop => ({
-                stop_id: stop.stop_id,
-                stop_name: stop.stop_name
-            }));
+            if (!trip) {
+                console.error(`Trip not found for route_id: ${routeId}`);
+                return res.status(404).json({ error: "Trip not found for route" });
+            }
 
-        // 返回结果给前端
-        res.json({
-            route_id: routeId,
-            route_name: route.route_short_name,
-            stops: stopDetails
+            const shapeId = trip.shape_id;
+
+            // Step 3: 根据 shape_id 查找并返回路线的地理数据
+            const shapeFilePath = path.join(shapesDir, `shape_${shapeId}.json`);
+            fs.readFile(shapeFilePath, "utf-8", (err, shapeData) => {
+                if (err) {
+                    console.error(`Error reading shape file for shape_id: ${shapeId}`, err);
+                    return res.status(500).json({ error: "Error reading shape data" });
+                }
+
+                // 解析并返回 JSON 数据
+                res.json(JSON.parse(shapeData));
+            });
         });
-
-    } catch (error) {
-        console.error("Error fetching bus stops:", error);
-        res.status(500).json({ error: "Internal server error" });
-    }
+    });
 });
 
 // 启动服务器
